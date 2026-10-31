@@ -1,0 +1,71 @@
+# ============================================================
+# CONFIGURABLE PROOF-OF-CONCEPT RISK RULES
+# ============================================================
+# These thresholds are illustrative assumptions created to make
+# the proof of concept executable. They are NOT real banking
+# policy, regulatory requirements, or legal guidance.
+# Modify these values freely during testing.
+# ============================================================
+
+income_stability:
+  # Minimum income thresholds (annual, in currency units)
+  high_stability_min: 80000
+  medium_stability_min: 40000
+  # low_stability: anything below medium_stability_min
+
+employment_risk:
+  # Employment types ranked by risk (lower = less risk)
+  low_risk_types:
+    - SALARIED
+    - GOVERNMENT
+  medium_risk_types:
+    - SELF_EMPLOYED
+    - CONTRACT
+  high_risk_types:
+    - UNEMPLOYED
+    - PART_TIME
+    - OTHER
+
+credit_score:
+  # Credit score risk bands (0–850 scale assumption)
+  excellent_min: 750
+  good_min: 650
+  fair_min: 550
+  poor_min: 0
+
+debt_to_income:
+  # DTI = Existing Liabilities / Income
+  low_risk_max: 0.30       # <= 30%  → Low Risk
+  medium_risk_max: 0.50    # <= 50%  → Medium Risk
+  # above medium_risk_max  → High Risk
+
+loan_amount:
+  # Loan amount risk bands (currency units)
+  low_risk_max: 100000
+  medium_risk_max: 500000
+  # above medium_risk_max  → High Risk
+
+anomaly_detection:
+  # Loan-to-income ratio threshold for anomaly flag
+  loan_to_income_ratio_max: 10.0
+  # Age bounds for anomaly flag
+  age_min: 18
+  age_max: 75
+  # Minimum tenure in months
+  tenure_min: 6
+
+decision_synthesis:
+  # Risk score weights (must sum to 1.0)
+  credit_score_weight: 0.35
+  dti_weight: 0.30
+  loan_amount_weight: 0.20
+  employment_weight: 0.15
+
+  # Classification thresholds (risk score 0–100)
+  approved_max_risk: 35
+  manual_review_max_risk: 65
+  # above manual_review_max_risk → Rejected
+
+  # Confidence level adjustments
+  high_confidence_threshold: 0.80
+  medium_confidence_threshold: 0.55
