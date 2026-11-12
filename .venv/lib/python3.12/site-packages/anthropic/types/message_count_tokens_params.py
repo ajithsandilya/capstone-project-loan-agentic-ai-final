@@ -1,9 +1,7 @@
-# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
 from __future__ import annotations
 
 from typing import Union, Iterable, Optional
-from typing_extensions import Required, TypedDict
+from typing_extensions import Literal, Required, TypedDict
 
 from .model_param import ModelParam
 from .message_param import MessageParam
@@ -33,7 +31,10 @@ class MessageCountTokensParams(TypedDict, total=False):
 
     If the final message uses the `assistant` role, the response content will
     continue immediately from the content in that message. This can be used to
-    constrain part of the model's response.
+    constrain part of the model's response. This is called prefill. On models that
+    don't support prefill, creating a message that ends with a partial `assistant`
+    response returns a 400 error. See
+    [Prefill not supported](https://platform.claude.com/docs/en/api/errors#prefill-not-supported).
 
     Example with a single `user` message:
 
@@ -51,7 +52,8 @@ class MessageCountTokensParams(TypedDict, total=False):
     ]
     ```
 
-    Example with a partially-filled response from Claude:
+    Example with a partially-filled response from Claude, for models that support
+    prefill:
 
     ```json
     [
@@ -76,20 +78,20 @@ class MessageCountTokensParams(TypedDict, total=False):
     { "role": "user", "content": [{ "type": "text", "text": "Hello, Claude" }] }
     ```
 
-    See [input examples](https://docs.claude.com/en/api/messages-examples).
+    See
+    [input examples](https://platform.claude.com/docs/en/build-with-claude/working-with-messages).
 
     Note that if you want to include a
-    [system prompt](https://docs.claude.com/en/docs/system-prompts), you can use the
-    top-level `system` parameter — there is no `"system"` role for input messages in
-    the Messages API.
+    [system prompt](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#give-claude-a-role),
+    you can use the top-level `system` parameter.
 
     There is a limit of 100,000 messages in a single request.
     """
 
     model: Required[ModelParam]
-    """
-    The model that will complete your prompt.\n\nSee
-    [models](https://docs.anthropic.com/en/docs/models-overview) for additional
+    """The model that will complete your prompt.
+
+    See [models](https://docs.anthropic.com/en/docs/models-overview) for additional
     details and options.
     """
 
@@ -102,24 +104,36 @@ class MessageCountTokensParams(TypedDict, total=False):
     output_config: OutputConfigParam
     """Configuration options for the model's output, such as the output format."""
 
+    speed: Optional[Literal["standard", "fast"]]
+    """The inference speed mode for this request.
+
+    `"fast"` enables high output-tokens-per-second inference.
+
+    Some models require the `fast-mode-2026-02-01` beta header for any `speed`
+    value. See
+    [fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) for
+    which models.
+    """
+
     system: Union[str, Iterable[TextBlockParam]]
     """System prompt.
 
     A system prompt is a way of providing context and instructions to Claude, such
     as specifying a particular goal or role. See our
-    [guide to system prompts](https://docs.claude.com/en/docs/system-prompts).
+    [guide to system prompts](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#give-claude-a-role).
     """
 
     thinking: ThinkingConfigParam
-    """Configuration for enabling Claude's extended thinking.
+    """Configuration for Claude's thinking.
 
-    When enabled, responses include `thinking` content blocks showing Claude's
-    thinking process before the final answer. Requires a minimum budget of 1,024
-    tokens and counts towards your `max_tokens` limit.
+    With `{"type": "adaptive"}`, Claude decides when and how much to think. With
+    `{"type": "enabled"}` (manual extended thinking), you set a `budget_tokens` of
+    at least 1,024. Thinking tokens count toward your `max_tokens` limit.
 
-    See
-    [extended thinking](https://docs.claude.com/en/docs/build-with-claude/extended-thinking)
-    for details.
+    Which `type` values are accepted, and what happens when you omit `thinking`,
+    depend on the model. See
+    [thinking](https://platform.claude.com/docs/en/build-with-claude/thinking#configuring-thinking)
+    for each model's behavior.
     """
 
     tool_choice: ToolChoiceParam
@@ -139,9 +153,9 @@ class MessageCountTokensParams(TypedDict, total=False):
 
     There are two types of tools: **client tools** and **server tools**. The
     behavior described below applies to client tools. For
-    [server tools](https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview#server-tools),
+    [server tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools),
     see their individual documentation as each has its own behavior (e.g., the
-    [web search tool](https://docs.claude.com/en/docs/agents-and-tools/tool-use/web-search-tool)).
+    [web search tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)).
 
     Each tool definition includes:
 
@@ -204,5 +218,23 @@ class MessageCountTokensParams(TypedDict, total=False):
     functions, or more generally whenever you want the model to produce a particular
     JSON structure of output.
 
-    See our [guide](https://docs.claude.com/en/docs/tool-use) for more details.
+    See our
+    [guide](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview)
+    for more details.
+    """
+
+    user_profile_id: str
+    """The user profile ID to attribute this request to.
+
+    Use when acting on behalf of a party other than your organization.
+    """
+
+    workspace_id: str
+    """Optional header to select the Workspace for this request.
+
+    The value is a Workspace ID (for example, `wrkspc_011CZkZaBF1tNoB5wlCeusgy`).
+
+    Only needed for credentials that can act on more than one Workspace. A
+    credential that belongs to a specific Workspace may omit it; if sent, it must
+    match that Workspace.
     """

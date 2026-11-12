@@ -23,12 +23,12 @@ DECISION SYNTHESIS CONTEXT:
 {synthesis_context}
 
 REQUIRED JSON SCHEMA:
-{
+{{
   "classification": "Approved" | "Rejected" | "Requires Manual Review",
   "risk_score": <number 0-100>,
   "confidence_level": <number 0.0-1.0>,
   "key_decision_factors": [<string>, ...],
   "explanation": "<string>"
-}
+}}
 
 Return only the JSON object. Do not add markdown, comments, or extra fields.

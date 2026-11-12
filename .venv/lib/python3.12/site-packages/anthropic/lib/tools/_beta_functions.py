@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import sys
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Union, Generic, TypeVar, Callable, Iterable, Coroutine, cast, overload
-from inspect import iscoroutinefunction
+from inspect import isawaitable, isasyncgenfunction, iscoroutinefunction, isgeneratorfunction
+from collections.abc import Awaitable
 from typing_extensions import Literal, TypeAlias, override
 
+import anyio
 import pydantic
 import docstring_parser
 from pydantic import BaseModel
@@ -25,19 +28,21 @@ BetaFunctionToolResultType: TypeAlias = Union[str, Iterable[BetaContent]]
 
 
 class ToolError(Exception):
-    """Error that can be raised from a tool to return structured content with ``is_error: True``.
+    """Error that can be raised from a tool to return structured content with `is_error: True`.
 
-    When the tool runner catches this error, it will use the :attr:`content`
-    property as the tool result instead of ``repr(exc)``.
+    When the tool runner catches this error, it will use the `content`
+    property as the tool result instead of `repr(exc)`.
 
-    Example::
+    Example:
 
-        raise ToolError(
-            [
-                {"type": "text", "text": "Error details here"},
-                {"type": "image", "source": {"type": "base64", "data": "...", "media_type": "image/png"}},
-            ]
-        )
+    ```py
+    raise ToolError(
+        [
+            {"type": "text", "text": "Error details here"},
+            {"type": "image", "source": {"type": "base64", "data": "...", "media_type": "image/png"}},
+        ]
+    )
+    ```
     """
 
     content: BetaFunctionToolResultType
@@ -77,7 +82,10 @@ class BetaBuiltinFunctionTool(ABC):
         raw = self.to_dict()
         if "mcp_server_name" in raw:
             return raw["mcp_server_name"]
-        return raw["name"]
+        name = raw.get("name")
+        if name is None:
+            raise ValueError(f"Tool of type {raw.get('type')!r} does not have a name")
+        return name
 
 
 class BetaAsyncBuiltinFunctionTool(ABC):
@@ -92,7 +100,10 @@ class BetaAsyncBuiltinFunctionTool(ABC):
         raw = self.to_dict()
         if "mcp_server_name" in raw:
             return raw["mcp_server_name"]
-        return raw["name"]
+        name = raw.get("name")
+        if name is None:
+            raise ValueError(f"Tool of type {raw.get('type')!r} does not have a name")
+        return name
 
 
 class BaseFunctionTool(Generic[CallableT]):
@@ -106,6 +117,33 @@ class BaseFunctionTool(Generic[CallableT]):
 
     input_schema: InputSchema
 
+    close: Callable[[], None | Awaitable[None]] | None = None
+    """Optional cleanup hook.
+
+    A tool that owns a resource (a subprocess, a connection, …) may set this on
+    its instance; the result is awaited if it returns an awaitable.
+
+    Which runners actually invoke it differs — check before relying on it for a
+    stateful tool:
+
+    - `SessionToolRunner` (`client.beta.sessions.events.tool_runner(...)`)
+      and the `anthropic.lib.environments.EnvironmentWorker` built on it
+      **do** call `close` when the run ends.
+    - The Messages `BetaToolRunner` / `BetaAsyncToolRunner`
+      (`client.beta.messages.tool_runner(...)`) does **not** call `close`.
+      A stateful tool (e.g. the `bash` tool's subprocess) handed to the
+      Messages tool runner therefore leaks its resource — run it under
+      `SessionToolRunner` / the environment worker instead.
+    """
+
+    _context_manager: object | None = None
+    """Set by `beta_tool` / `beta_async_tool` when the tool was
+    defined as a (sync/async) context manager: the *entered* context manager
+    whose `__exit__` / `__aexit__` the tool-runner cleanup path drives on the
+    way out. Additive to `close` — both run if both are present, so other
+    tool-runner consumers that only set `close` keep working unchanged.
+    """
+
     def __init__(
         self,
         func: CallableT,
@@ -115,7 +153,10 @@ class BaseFunctionTool(Generic[CallableT]):
         input_schema: InputSchema | type[BaseModel] | None = None,
         defer_loading: bool | None = None,
         cache_control: BetaCacheControlEphemeralParam | None = None,
-        allowed_callers: list[Literal["direct", "code_execution_20250825", "code_execution_20260120"]] | None = None,
+        allowed_callers: list[
+            Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+        ]
+        | None = None,
         eager_input_streaming: bool | None = None,
         input_examples: Iterable[dict[str, object]] | None = None,
         strict: bool | None = None,
@@ -210,7 +251,6 @@ class BaseFunctionTool(Generic[CallableT]):
                 if not properties or not is_dict(properties):
                     return schema
 
-                # Add parameter descriptions from docstring
                 for param in self._parsed_docstring.params:
                     prop_schema = properties.get(param.arg_name)
                     if not prop_schema or not is_dict(prop_schema):
@@ -257,6 +297,55 @@ class BetaAsyncFunctionTool(BaseFunctionTool[AsyncFunctionT]):
             raise ValueError(f"Invalid arguments for function {self.name}") from e
 
 
+def _is_sync_cm_factory(fn: object) -> bool:
+    """True when `fn` is a function produced by `contextlib.contextmanager`.
+
+    `contextmanager` wraps the generator function with `functools.wraps`, so
+    the original generator function is reachable as `__wrapped__` — the same
+    signal `inspect` itself uses. We never call `fn` to find out, so a
+    plain tool function is never accidentally invoked during detection.
+    """
+    wrapped = getattr(fn, "__wrapped__", None)
+    return wrapped is not None and isgeneratorfunction(wrapped)
+
+
+def _is_async_cm_factory(fn: object) -> bool:
+    """True when `fn` is a function produced by `contextlib.asynccontextmanager`."""
+    wrapped = getattr(fn, "__wrapped__", None)
+    return wrapped is not None and isasyncgenfunction(wrapped)
+
+
+async def aclose_runnable_tool(tool: object) -> None:
+    """Run a runnable tool's optional cleanup.
+
+    Drives the legacy `aclose` / `close` attribute (awaited if it returns an
+    awaitable) and, when the tool was defined as a context manager via
+    `beta_tool` / `beta_async_tool`, its `__exit__` /
+    `__aexit__`. Both run when both are present — the context-manager support
+    is purely additive to `close`. Exceptions are logged, never raised, so one
+    tool's bad cleanup can't abort another tool's.
+    """
+    closer = getattr(tool, "aclose", None) or getattr(tool, "close", None)
+    if closer is not None:
+        try:
+            result = closer()
+            if isawaitable(result):
+                await result
+        except Exception as e:
+            log.warning("tool.close failed tool=%s error=%s", getattr(tool, "name", "?"), e)
+
+    cm = getattr(tool, "_context_manager", None)
+    if cm is not None:
+        try:
+            aexit = getattr(cm, "__aexit__", None)
+            if aexit is not None:
+                await aexit(None, None, None)
+            else:
+                cm.__exit__(None, None, None)
+        except Exception as e:
+            log.warning("tool context-manager cleanup failed tool=%s error=%s", getattr(tool, "name", "?"), e)
+
+
 @overload
 def beta_tool(func: FunctionT) -> BetaFunctionTool[FunctionT]: ...
 
@@ -270,7 +359,10 @@ def beta_tool(
     input_schema: InputSchema | type[BaseModel] | None = None,
     defer_loading: bool | None = None,
     cache_control: BetaCacheControlEphemeralParam | None = None,
-    allowed_callers: list[Literal["direct", "code_execution_20250825", "code_execution_20260120"]] | None = None,
+    allowed_callers: list[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
+    | None = None,
     eager_input_streaming: bool | None = None,
     input_examples: Iterable[dict[str, object]] | None = None,
     strict: bool | None = None,
@@ -285,7 +377,10 @@ def beta_tool(
     input_schema: InputSchema | type[BaseModel] | None = None,
     defer_loading: bool | None = None,
     cache_control: BetaCacheControlEphemeralParam | None = None,
-    allowed_callers: list[Literal["direct", "code_execution_20250825", "code_execution_20260120"]] | None = None,
+    allowed_callers: list[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
+    | None = None,
     eager_input_streaming: bool | None = None,
     input_examples: Iterable[dict[str, object]] | None = None,
     strict: bool | None = None,
@@ -300,7 +395,10 @@ def beta_tool(
     input_schema: InputSchema | type[BaseModel] | None = None,
     defer_loading: bool | None = None,
     cache_control: BetaCacheControlEphemeralParam | None = None,
-    allowed_callers: list[Literal["direct", "code_execution_20250825", "code_execution_20260120"]] | None = None,
+    allowed_callers: list[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
+    | None = None,
     eager_input_streaming: bool | None = None,
     input_examples: Iterable[dict[str, object]] | None = None,
     strict: bool | None = None,
@@ -317,11 +415,48 @@ def beta_tool(
 
     @function_tool(name="custom_name")
     def my_func(x: int) -> str: ...
+
+    `SessionToolRunner` and `EnvironmentWorker` call the function on a
+    worker thread. A `@contextmanager` tool is entered at decoration time and
+    exited by the runner's cleanup, both off that thread, so avoid thread-bound
+    resources such as a default `sqlite3` connection in `__enter__`.
     """
     if _compat.PYDANTIC_V1:
         raise RuntimeError("Tool functions are only supported with Pydantic v2")
 
     def _make(fn: FunctionT) -> BetaFunctionTool[FunctionT]:
+        if _is_async_cm_factory(fn):
+            raise TypeError(
+                "@beta_tool was applied to an @asynccontextmanager; "
+                "use @beta_async_tool for an async context-manager tool"
+            )
+        if _is_sync_cm_factory(fn):
+            # The decorated function is a @contextmanager that yields the tool
+            # callable: enter it now to obtain the callable, build the tool from
+            # it (so schema inference still sees the real signature), and keep
+            # the entered context manager so the runner cleanup can exit it.
+            cm = cast(Any, fn)()
+            inner = cm.__enter__()
+            try:
+                tool = BetaFunctionTool(
+                    cast(FunctionT, inner),
+                    name=name,
+                    description=description,
+                    input_schema=input_schema,
+                    defer_loading=defer_loading,
+                    cache_control=cache_control,
+                    allowed_callers=allowed_callers,
+                    eager_input_streaming=eager_input_streaming,
+                    input_examples=input_examples,
+                    strict=strict,
+                )
+            except BaseException:
+                # Construction failed after we entered the context manager —
+                # unwind it so its resource isn't leaked.
+                cm.__exit__(*sys.exc_info())
+                raise
+            tool._context_manager = cm
+            return tool
         return BetaFunctionTool(
             fn,
             name=name,
@@ -354,7 +489,10 @@ def beta_async_tool(
     input_schema: InputSchema | type[BaseModel] | None = None,
     defer_loading: bool | None = None,
     cache_control: BetaCacheControlEphemeralParam | None = None,
-    allowed_callers: list[Literal["direct", "code_execution_20250825", "code_execution_20260120"]] | None = None,
+    allowed_callers: list[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
+    | None = None,
     eager_input_streaming: bool | None = None,
     input_examples: Iterable[dict[str, object]] | None = None,
     strict: bool | None = None,
@@ -369,7 +507,10 @@ def beta_async_tool(
     input_schema: InputSchema | type[BaseModel] | None = None,
     defer_loading: bool | None = None,
     cache_control: BetaCacheControlEphemeralParam | None = None,
-    allowed_callers: list[Literal["direct", "code_execution_20250825", "code_execution_20260120"]] | None = None,
+    allowed_callers: list[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
+    | None = None,
     eager_input_streaming: bool | None = None,
     input_examples: Iterable[dict[str, object]] | None = None,
     strict: bool | None = None,
@@ -384,7 +525,10 @@ def beta_async_tool(
     input_schema: InputSchema | type[BaseModel] | None = None,
     defer_loading: bool | None = None,
     cache_control: BetaCacheControlEphemeralParam | None = None,
-    allowed_callers: list[Literal["direct", "code_execution_20250825", "code_execution_20260120"]] | None = None,
+    allowed_callers: list[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
+    | None = None,
     eager_input_streaming: bool | None = None,
     input_examples: Iterable[dict[str, object]] | None = None,
     strict: bool | None = None,
@@ -406,6 +550,58 @@ def beta_async_tool(
         raise RuntimeError("Tool functions are only supported with Pydantic v2")
 
     def _make(fn: AsyncFunctionT) -> BetaAsyncFunctionTool[AsyncFunctionT]:
+        if _is_sync_cm_factory(fn):
+            raise TypeError(
+                "@beta_async_tool was applied to a @contextmanager; use @beta_tool for a sync context-manager tool"
+            )
+        if _is_async_cm_factory(fn):
+            # The decorated function is an @asynccontextmanager that yields the
+            # tool callable. Entering it requires awaiting, which the decorator
+            # can't do, so enter lazily on first call and cache the result; the
+            # parameters can't be inferred until then, so an explicit
+            # `input_schema` is required.
+            if input_schema is None:
+                raise TypeError(
+                    "an @asynccontextmanager tool needs an explicit input_schema= "
+                    "(its parameters can't be inferred until the context manager is entered)"
+                )
+            cm = cast(Any, fn)()
+            state: dict[str, Any] = {"validated": None, "entered": False}
+            enter_lock = anyio.Lock()
+            tool_box: list[BetaAsyncFunctionTool[AsyncFunctionT]] = []
+
+            async def _entered() -> Any:
+                if not state["entered"]:
+                    async with enter_lock:
+                        if not state["entered"]:
+                            inner = await cm.__aenter__()
+                            state["validated"] = pydantic.validate_call(inner)
+                            state["entered"] = True
+                            # Only now is there an entered __aexit__ to drive on
+                            # the cleanup path.
+                            tool_box[0]._context_manager = cm
+                return state["validated"]
+
+            async def _lazy(**kwargs: Any) -> BetaFunctionToolResultType:
+                validated = await _entered()
+                return cast(BetaFunctionToolResultType, await validated(**kwargs))
+
+            _lazy.__name__ = name or getattr(fn, "__name__", "tool")
+            _lazy.__doc__ = description if description is not None else getattr(fn, "__doc__", None)
+            tool = BetaAsyncFunctionTool(
+                cast(AsyncFunctionT, _lazy),
+                name=name,
+                description=description,
+                input_schema=input_schema,
+                defer_loading=defer_loading,
+                cache_control=cache_control,
+                allowed_callers=allowed_callers,
+                eager_input_streaming=eager_input_streaming,
+                input_examples=input_examples,
+                strict=strict,
+            )
+            tool_box.append(tool)
+            return tool
         return BetaAsyncFunctionTool(
             fn,
             name=name,

@@ -1,5 +1,3 @@
-# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
 from __future__ import annotations
 
 from typing import Dict, List, Union, Iterable, Optional
@@ -41,7 +39,9 @@ class BetaToolParam(TypedDict, total=False):
     This is how the tool will be called by the model and in `tool_use` blocks.
     """
 
-    allowed_callers: List[Literal["direct", "code_execution_20250825", "code_execution_20260120"]]
+    allowed_callers: List[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
 
     cache_control: Optional[BetaCacheControlEphemeralParam]
     """Create a cache control breakpoint at this content block."""

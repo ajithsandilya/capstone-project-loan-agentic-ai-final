@@ -5,11 +5,11 @@ Supports the Loan Decision Agent in combining agent outputs into a decision cont
 import os
 import yaml
 from pathlib import Path
-from fastapi import FastAPI
+from fastmcp import FastMCP
 from pydantic import BaseModel
 from typing import Dict, Any, List, Literal
 
-app = FastAPI(title="DecisionSynthesis MCP Server")
+mcp = FastMCP("DecisionSynthesis MCP Server")
 
 
 def _load_rules() -> Dict[str, Any]:
@@ -42,13 +42,22 @@ class SynthesisResponse(BaseModel):
     synthesis_context: str
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "server": "DecisionSynthesis"}
-
-
-@app.post("/tools/synthesize_decision", response_model=SynthesisResponse)
-def synthesize_decision(req: SynthesisRequest) -> SynthesisResponse:
+@mcp.tool()
+def synthesize_decision(
+    applicant_id: str,
+    credit_score: int,
+    income: float,
+    loan_amount: float,
+    tenure: int,
+    existing_liabilities: float,
+    employment_type: str,
+    income_stability_score: float,
+    employment_risk: str,
+    debt_to_income_ratio: float,
+    credit_score_risk_level: str,
+    loan_amount_risk: str,
+    anomaly_detection: str,
+) -> Dict[str, Any]:
     rules = _load_rules()
     ds_rules = rules.get("decision_synthesis", {})
     cs_rules = rules.get("credit_score", {})
@@ -56,7 +65,7 @@ def synthesize_decision(req: SynthesisRequest) -> SynthesisResponse:
     la_rules = rules.get("loan_amount", {})
 
     # ---- Credit score component (0–100, lower = riskier) ----
-    cs = req.credit_score
+    cs = credit_score
     if cs >= cs_rules.get("excellent_min", 750):
         cs_component = 10.0
     elif cs >= cs_rules.get("good_min", 650):
@@ -67,7 +76,7 @@ def synthesize_decision(req: SynthesisRequest) -> SynthesisResponse:
         cs_component = 85.0
 
     # ---- DTI component ----
-    dti = req.debt_to_income_ratio
+    dti = debt_to_income_ratio
     if dti <= dti_rules.get("low_risk_max", 0.30):
         dti_component = 10.0
     elif dti <= dti_rules.get("medium_risk_max", 0.50):
@@ -76,7 +85,7 @@ def synthesize_decision(req: SynthesisRequest) -> SynthesisResponse:
         dti_component = 80.0
 
     # ---- Loan amount component ----
-    la = req.loan_amount
+    la = loan_amount
     if la <= la_rules.get("low_risk_max", 100000):
         la_component = 10.0
     elif la <= la_rules.get("medium_risk_max", 500000):
@@ -85,7 +94,7 @@ def synthesize_decision(req: SynthesisRequest) -> SynthesisResponse:
         la_component = 75.0
 
     # ---- Employment component ----
-    emp = req.employment_risk.lower()
+    emp = employment_risk.lower()
     if emp == "low":
         emp_component = 10.0
     elif emp == "medium":
@@ -117,7 +126,7 @@ def synthesize_decision(req: SynthesisRequest) -> SynthesisResponse:
         confidence = 0.55
 
     # Anomaly detected lowers confidence
-    if "anomaly" in req.anomaly_detection.lower() and "no anomal" not in req.anomaly_detection.lower():
+    if "anomaly" in anomaly_detection.lower() and "no anomal" not in anomaly_detection.lower():
         confidence = max(0.40, confidence - 0.15)
         risk_score = min(100, risk_score + 10)
 
@@ -135,41 +144,43 @@ def synthesize_decision(req: SynthesisRequest) -> SynthesisResponse:
     # ---- Key factors ----
     factors = []
     if cs_component >= 60:
-        factors.append(f"Credit score {req.credit_score} indicates elevated risk")
+        factors.append(f"Credit score {credit_score} indicates elevated risk")
     else:
-        factors.append(f"Credit score {req.credit_score} is within acceptable range")
+        factors.append(f"Credit score {credit_score} is within acceptable range")
 
     if dti_component >= 45:
-        factors.append(f"Debt-to-income ratio {req.debt_to_income_ratio:.2f} is elevated")
+        factors.append(f"Debt-to-income ratio {debt_to_income_ratio:.2f} is elevated")
     else:
-        factors.append(f"Debt-to-income ratio {req.debt_to_income_ratio:.2f} is acceptable")
+        factors.append(f"Debt-to-income ratio {debt_to_income_ratio:.2f} is acceptable")
 
     if la_component >= 40:
-        factors.append(f"Loan amount {req.loan_amount} presents medium-to-high risk")
+        factors.append(f"Loan amount {loan_amount} presents medium-to-high risk")
     if emp_component >= 40:
-        factors.append(f"Employment type '{req.employment_type}' carries elevated risk")
-    if "anomaly" in req.anomaly_detection.lower() and "no anomal" not in req.anomaly_detection.lower():
-        factors.append(f"Anomaly detected: {req.anomaly_detection}")
+        factors.append(f"Employment type '{employment_type}' carries elevated risk")
+    if "anomaly" in anomaly_detection.lower() and "no anomal" not in anomaly_detection.lower():
+        factors.append(f"Anomaly detected: {anomaly_detection}")
 
     context = (
         f"Risk Score: {risk_score:.1f}/100 | "
         f"Confidence: {confidence:.0%} | "
-        f"Credit Score Risk: {req.credit_score_risk_level} | "
-        f"DTI: {req.debt_to_income_ratio:.2f} | "
-        f"Loan Amount Risk: {req.loan_amount_risk} | "
-        f"Employment Risk: {req.employment_risk}"
+        f"Credit Score Risk: {credit_score_risk_level} | "
+        f"DTI: {debt_to_income_ratio:.2f} | "
+        f"Loan Amount Risk: {loan_amount_risk} | "
+        f"Employment Risk: {employment_risk}"
     )
 
-    return SynthesisResponse(
-        risk_score=round(risk_score, 1),
-        confidence_level=round(confidence, 2),
-        preliminary_classification=classification,
-        key_decision_factors=factors,
-        synthesis_context=context,
-    )
+    return {
+        "risk_score": round(risk_score, 1),
+        "confidence_level": round(confidence, 2),
+        "preliminary_classification": classification,
+        "key_decision_factors": factors,
+        "synthesis_context": context,
+    }
+
+
+app = mcp.http_app()
 
 
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.getenv("MCP_DECISION_SYNTHESIS_PORT", "8003"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    mcp.run(transport="http", host="0.0.0.0", port=port)

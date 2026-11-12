@@ -1,13 +1,91 @@
-"""Tracking for SDK helper usage via the x-stainless-helper header."""
+"""Tracking for SDK helper usage via the x-stainless-helper header.
+
+This module is the single source of truth for the helper-telemetry header
+keys and the closed tag vocabulary. The append-don't-clobber merge for the
+header itself lives in `anthropic._base_client.merge_headers`; here
+we only carry the constants and the per-object tagging machinery.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Dict, cast
+from typing import Any, Dict, Mapping, TypeVar, cast
+from typing_extensions import Literal
+
+__all__ = [
+    "STAINLESS_HELPER_HEADER",
+    "STAINLESS_HELPER_METHOD_HEADER",
+    "STAINLESS_STREAM_HELPER_HEADER",
+    "HELPER_METHOD_STREAM",
+    "StainlessHelperHeaderValue",
+    "helper_header",
+    "tag_helper",
+    "get_helper_tag",
+    "carry_helper_tag",
+    "collect_helpers",
+    "stainless_helper_header",
+    "stainless_helper_header_from_file",
+]
+
+
+STAINLESS_HELPER_HEADER = "x-stainless-helper"
+"""Telemetry header naming the SDK helper(s) a request came from.
+
+Always this lowercase form. `merge_headers` matches this key
+case-insensitively for its append semantics, but a single canonical casing
+keeps every call site greppable and avoids two literal casings of the same
+key reaching a plain dict merge anywhere upstream of it.
+"""
+
+STAINLESS_HELPER_METHOD_HEADER = "x-stainless-helper-method"
+"""Telemetry header naming the SDK method (e.g. `stream`) in use."""
+
+STAINLESS_STREAM_HELPER_HEADER = "x-stainless-stream-helper"
+"""Telemetry header naming the streaming surface (e.g. `beta.messages`)."""
+
+HELPER_METHOD_STREAM = "stream"
+
+
+StainlessHelperHeaderValue = Literal[
+    "beta.messages.parse",
+    "BetaToolRunner",
+    "browser-toolset",
+    "compaction",
+    "computer-toolset",
+    "environments-work-poller",
+    "environments-worker",
+    "fallback-refusal-middleware",
+    "mcp_content",
+    "mcp_message",
+    "mcp_resource_to_content",
+    "mcp_resource_to_file",
+    "mcp_tool",
+    "message-thread",
+    "messages.parse",
+    "session-tool-runner",
+]
+"""The closed set of helper telemetry tags, shared verbatim across SDKs.
+
+Constrained so a typo at any call site is a type error rather than silently
+mistagged telemetry. Existing values keep their original spellings — telemetry
+consumers match on them, so renames lose history. New tags are hyphenated
+lowercase; add them here (and to the matching set in every other SDK) before
+using them.
+"""
+
+
+def helper_header(value: StainlessHelperHeaderValue) -> dict[str, str]:
+    """The `x-stainless-helper: <value>` header dict, for passing into a
+    `merge_headers` call or as `extra_headers`/`default_headers`.
+
+    Typing keeps the value drawn from the closed vocabulary above.
+    """
+    return {STAINLESS_HELPER_HEADER: value}
+
 
 _HELPER_ATTR = "_stainless_helper"
 
 
-def tag_helper(obj: Any, name: str) -> None:
+def tag_helper(obj: Any, name: StainlessHelperHeaderValue) -> None:
     """Mark an object as created by a named SDK helper."""
     try:
         object.__setattr__(obj, _HELPER_ATTR, name)
@@ -20,37 +98,51 @@ def get_helper_tag(obj: object) -> str | None:
     return getattr(obj, _HELPER_ATTR, None)  # type: ignore[return-value]
 
 
+_MappingT = TypeVar("_MappingT", bound="Mapping[str, object]")
+
+
+class _TaggedDict(Dict[str, Any]):
+    """A plain `dict` rejects `object.__setattr__`; this subclass can carry the tag."""
+
+
+def carry_helper_tag(source: object, params: _MappingT) -> _MappingT:
+    """Return `params` carrying `source`'s helper tag, so the tag survives serializing a tagged object."""
+    tag = get_helper_tag(source)
+    if tag is None:
+        return params
+    tagged = _TaggedDict(params)
+    object.__setattr__(tagged, _HELPER_ATTR, tag)
+    return cast(_MappingT, tagged)
+
+
 def collect_helpers(
     tools: Any = None,
     messages: Any = None,
 ) -> list[str]:
     """Collect deduplicated helper names from tools and messages."""
-    helpers: set[str] = set()
+    helpers: list[str] = []
+
+    def _add(tag: str | None) -> None:
+        if tag is not None and tag not in helpers:
+            helpers.append(tag)
 
     if tools:
         for tool in tools:
-            tag = get_helper_tag(tool)
-            if tag is not None:
-                helpers.add(tag)
+            _add(get_helper_tag(tool))
 
     if messages:
         for message in messages:
-            tag = get_helper_tag(message)
-            if tag is not None:
-                helpers.add(tag)
+            _add(get_helper_tag(message))
 
-            # Check content blocks within messages
             if isinstance(message, dict):
-                blocks: Any = cast(Dict[str, Any], message).get("content")
+                blocks: Any = cast(dict[str, Any], message).get("content")
             else:
                 blocks = getattr(message, "content", None)
             if isinstance(blocks, list):
                 for block in cast(list[object], blocks):
-                    tag = get_helper_tag(block)
-                    if tag is not None:
-                        helpers.add(tag)
+                    _add(get_helper_tag(block))
 
-    return list(helpers)
+    return helpers
 
 
 def stainless_helper_header(
@@ -64,7 +156,7 @@ def stainless_helper_header(
     helpers = collect_helpers(tools, messages)
     if not helpers:
         return {}
-    return {"x-stainless-helper": ", ".join(helpers)}
+    return {STAINLESS_HELPER_HEADER: ", ".join(helpers)}
 
 
 def stainless_helper_header_from_file(file: object) -> dict[str, str]:
@@ -72,4 +164,4 @@ def stainless_helper_header_from_file(file: object) -> dict[str, str]:
     tag = get_helper_tag(file)
     if tag is None:
         return {}
-    return {"x-stainless-helper": tag}
+    return {STAINLESS_HELPER_HEADER: tag}

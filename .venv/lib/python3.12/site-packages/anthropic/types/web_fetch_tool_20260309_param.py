@@ -1,5 +1,3 @@
-# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
 from __future__ import annotations
 
 from typing import List, Optional
@@ -7,6 +5,7 @@ from typing_extensions import Literal, Required, TypedDict
 
 from .._types import SequenceNotStr
 from .citations_config_param import CitationsConfigParam
+from .web_fetch_url_sources_param import WebFetchURLSourcesParam
 from .cache_control_ephemeral_param import CacheControlEphemeralParam
 
 __all__ = ["WebFetchTool20260309Param"]
@@ -23,7 +22,9 @@ class WebFetchTool20260309Param(TypedDict, total=False):
 
     type: Required[Literal["web_fetch_20260309"]]
 
-    allowed_callers: List[Literal["direct", "code_execution_20250825", "code_execution_20260120"]]
+    allowed_callers: List[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
 
     allowed_domains: Optional[SequenceNotStr[str]]
     """List of domains to allow fetching from"""
@@ -57,6 +58,12 @@ class WebFetchTool20260309Param(TypedDict, total=False):
 
     strict: bool
     """When true, guarantees schema validation on tool names and inputs"""
+
+    url_sources: Optional[WebFetchURLSourcesParam]
+    """Which sources contribute to the set of URLs the tool may fetch.
+
+    Omitted means every source.
+    """
 
     use_cache: bool
     """Whether to use cached content.

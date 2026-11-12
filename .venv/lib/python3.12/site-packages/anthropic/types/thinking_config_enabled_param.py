@@ -1,5 +1,3 @@
-# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
 from __future__ import annotations
 
 from typing import Optional
@@ -18,7 +16,7 @@ class ThinkingConfigEnabledParam(TypedDict, total=False):
     Must be ≥1024 and less than `max_tokens`.
 
     See
-    [extended thinking](https://docs.claude.com/en/docs/build-with-claude/extended-thinking)
+    [extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
     for details.
     """
 
@@ -29,5 +27,6 @@ class ThinkingConfigEnabledParam(TypedDict, total=False):
 
     When set to `summarized`, thinking is returned normally. When set to `omitted`,
     thinking content is redacted but a signature is returned for multi-turn
-    continuity. Defaults to `summarized`.
+    continuity. The default depends on the model; see
+    [Controlling thinking display](https://platform.claude.com/docs/en/build-with-claude/thinking#controlling-thinking-display).
     """

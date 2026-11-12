@@ -7,16 +7,17 @@ import os
 import json
 import logging
 from pathlib import Path
-import httpx
 
 from models.loan_application import LoanApplication
 from models.agent_outputs import ApplicantProfileOutput, FinancialRiskOutput, LoanDecisionOutput
+from mcp_client import call_mcp_tool_sync
 
 logger = logging.getLogger(__name__)
 
 MCP_DECISION_SYNTHESIS_URL = os.getenv("MCP_DECISION_SYNTHESIS_URL", "http://localhost:8003")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL_NAME = os.getenv("ANTHROPIC_MODEL_NAME", "claude-sonnet-4-6")
+ANTHROPIC_MODEL_NAME = os.getenv("ANTHROPIC_MODEL_NAME", "global.anthropic.claude-sonnet-4-6")
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", None)
 MOCK_LLM_MODE = os.getenv("MOCK_LLM_MODE", "false").lower() == "true"
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "loan_decision_prompt.txt"
@@ -56,28 +57,24 @@ def run_loan_decision_agent(
     1. Calls DecisionSynthesis MCP to compute preliminary synthesis.
     2. Invokes Claude Sonnet 4.6 (or mock) for final structured decision.
     """
-    # Step 1: Call DecisionSynthesis MCP
-    synthesis_resp = httpx.post(
-        f"{MCP_DECISION_SYNTHESIS_URL}/tools/synthesize_decision",
-        json={
-            "applicant_id": application.applicant_id,
-            "credit_score": application.credit_score,
-            "income": application.applicant_profile.income,
-            "loan_amount": application.loan_amount,
-            "tenure": application.tenure,
-            "existing_liabilities": application.existing_liabilities,
-            "employment_type": application.applicant_profile.employment_type,
-            "income_stability_score": profile_output.income_stability_score,
-            "employment_risk": profile_output.employment_risk,
-            "debt_to_income_ratio": risk_output.debt_to_income_ratio,
-            "credit_score_risk_level": risk_output.credit_score_risk_level,
-            "loan_amount_risk": risk_output.loan_amount_risk,
-            "anomaly_detection": risk_output.anomaly_detection,
-        },
-        timeout=10.0,
+    # Step 1: Call DecisionSynthesis MCP via proper FastMCP Client
+    synthesis = call_mcp_tool_sync(
+        MCP_DECISION_SYNTHESIS_URL,
+        "synthesize_decision",
+        applicant_id=application.applicant_id,
+        credit_score=application.credit_score,
+        income=application.applicant_profile.income,
+        loan_amount=application.loan_amount,
+        tenure=application.tenure,
+        existing_liabilities=application.existing_liabilities,
+        employment_type=application.applicant_profile.employment_type,
+        income_stability_score=profile_output.income_stability_score,
+        employment_risk=profile_output.employment_risk,
+        debt_to_income_ratio=risk_output.debt_to_income_ratio,
+        credit_score_risk_level=risk_output.credit_score_risk_level,
+        loan_amount_risk=risk_output.loan_amount_risk,
+        anomaly_detection=risk_output.anomaly_detection,
     )
-    synthesis_resp.raise_for_status()
-    synthesis = synthesis_resp.json()
 
     # Step 2: Invoke LLM
     loan_data_str = json.dumps({
@@ -148,7 +145,11 @@ def _call_claude(
         synthesis_context=synthesis_context,
     )
 
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    client_kwargs = {"api_key": ANTHROPIC_API_KEY}
+    if ANTHROPIC_BASE_URL:
+        client_kwargs["base_url"] = ANTHROPIC_BASE_URL
+
+    client = Anthropic(**client_kwargs)
     message = client.messages.create(
         model=ANTHROPIC_MODEL_NAME,
         max_tokens=1024,

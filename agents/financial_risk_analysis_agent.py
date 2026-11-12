@@ -4,10 +4,12 @@ MCP Server: RiskRulesDB
 Performs financial risk analysis using configurable proof-of-concept rules.
 """
 import os
-import httpx
+import logging
 from models.loan_application import LoanApplication
 from models.agent_outputs import FinancialRiskOutput
+from mcp_client import call_mcp_tool_sync
 
+logger = logging.getLogger(__name__)
 
 MCP_RISK_RULES_DB_URL = os.getenv("MCP_RISK_RULES_DB_URL", "http://localhost:8002")
 
@@ -18,14 +20,8 @@ def run_financial_risk_analysis_agent(application: LoanApplication) -> Financial
     """
     profile = application.applicant_profile
 
-    # Fetch all configurable rules from RiskRulesDB
-    response = httpx.post(
-        f"{MCP_RISK_RULES_DB_URL}/tools/get_risk_rules",
-        json={"rule_category": "all"},
-        timeout=10.0,
-    )
-    response.raise_for_status()
-    rules_payload = response.json()
+    # Fetch all configurable rules from RiskRulesDB via proper FastMCP Client
+    rules_payload = call_mcp_tool_sync(MCP_RISK_RULES_DB_URL, "get_risk_rules", rule_category="all")
     rules = rules_payload.get("rules", {})
 
     dti_rules = rules.get("dti", {})

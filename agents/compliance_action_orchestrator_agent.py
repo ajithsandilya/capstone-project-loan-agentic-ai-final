@@ -4,8 +4,11 @@ MCP Server: NotificationSystem
 Performs final action orchestration after the loan decision is made.
 """
 import os
-import httpx
+import logging
 from models.agent_outputs import LoanDecisionOutput, ComplianceActionOutput
+from mcp_client import call_mcp_tool_sync
+
+logger = logging.getLogger(__name__)
 
 MCP_NOTIFICATION_SYSTEM_URL = os.getenv("MCP_NOTIFICATION_SYSTEM_URL", "http://localhost:8004")
 
@@ -18,18 +21,14 @@ def run_compliance_action_orchestrator_agent(
     Receives the Loan Decision Agent result, calls NotificationSystem MCP,
     and produces the final structured compliance and action output.
     """
-    response = httpx.post(
-        f"{MCP_NOTIFICATION_SYSTEM_URL}/tools/send_notification",
-        json={
-            "applicant_id": applicant_id,
-            "classification": decision_output.classification,
-            "risk_score": decision_output.risk_score,
-            "explanation": decision_output.explanation,
-        },
-        timeout=10.0,
+    result = call_mcp_tool_sync(
+        MCP_NOTIFICATION_SYSTEM_URL,
+        "send_notification",
+        applicant_id=applicant_id,
+        classification=decision_output.classification,
+        risk_score=decision_output.risk_score,
+        explanation=decision_output.explanation,
     )
-    response.raise_for_status()
-    result = response.json()
 
     from datetime import datetime
     ts = result.get("timestamp")

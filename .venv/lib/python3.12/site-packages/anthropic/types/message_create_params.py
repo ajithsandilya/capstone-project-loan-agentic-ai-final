@@ -1,5 +1,3 @@
-# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
 from __future__ import annotations
 
 from typing import Union, Iterable, Optional
@@ -11,6 +9,7 @@ from .message_param import MessageParam
 from .metadata_param import MetadataParam
 from .text_block_param import TextBlockParam
 from .tool_union_param import ToolUnionParam
+from .diagnostics_param import DiagnosticsParam
 from .tool_choice_param import ToolChoiceParam
 from .output_config_param import OutputConfigParam
 from .thinking_config_param import ThinkingConfigParam
@@ -18,6 +17,7 @@ from .tool_choice_any_param import ToolChoiceAnyParam
 from .tool_choice_auto_param import ToolChoiceAutoParam
 from .tool_choice_tool_param import ToolChoiceToolParam
 from .cache_control_ephemeral_param import CacheControlEphemeralParam
+from .message_create_params_container_param import MessageCreateParamsContainerParam
 
 __all__ = [
     "MessageCreateParamsBase",
@@ -38,8 +38,13 @@ class MessageCreateParamsBase(TypedDict, total=False):
     Note that our models may stop _before_ reaching this maximum. This parameter
     only specifies the absolute maximum number of tokens to generate.
 
+    Set to `0` to populate the
+    [prompt cache](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pre-warming-the-cache)
+    without generating a response.
+
     Different models have different maximum values for this parameter. See
-    [models](https://docs.claude.com/en/docs/models-overview) for details.
+    [models](https://platform.claude.com/docs/en/about-claude/models/overview) for
+    details.
     """
 
     messages: Required[Iterable[MessageParam]]
@@ -57,7 +62,10 @@ class MessageCreateParamsBase(TypedDict, total=False):
 
     If the final message uses the `assistant` role, the response content will
     continue immediately from the content in that message. This can be used to
-    constrain part of the model's response.
+    constrain part of the model's response. This is called prefill. On models that
+    don't support prefill, creating a message that ends with a partial `assistant`
+    response returns a 400 error. See
+    [Prefill not supported](https://platform.claude.com/docs/en/api/errors#prefill-not-supported).
 
     Example with a single `user` message:
 
@@ -75,7 +83,8 @@ class MessageCreateParamsBase(TypedDict, total=False):
     ]
     ```
 
-    Example with a partially-filled response from Claude:
+    Example with a partially-filled response from Claude, for models that support
+    prefill:
 
     ```json
     [
@@ -100,20 +109,20 @@ class MessageCreateParamsBase(TypedDict, total=False):
     { "role": "user", "content": [{ "type": "text", "text": "Hello, Claude" }] }
     ```
 
-    See [input examples](https://docs.claude.com/en/api/messages-examples).
+    See
+    [input examples](https://platform.claude.com/docs/en/build-with-claude/working-with-messages).
 
     Note that if you want to include a
-    [system prompt](https://docs.claude.com/en/docs/system-prompts), you can use the
-    top-level `system` parameter — there is no `"system"` role for input messages in
-    the Messages API.
+    [system prompt](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#give-claude-a-role),
+    you can use the top-level `system` parameter.
 
     There is a limit of 100,000 messages in a single request.
     """
 
     model: Required[ModelParam]
-    """
-    The model that will complete your prompt.\n\nSee
-    [models](https://docs.anthropic.com/en/docs/models-overview) for additional
+    """The model that will complete your prompt.
+
+    See [models](https://docs.anthropic.com/en/docs/models-overview) for additional
     details and options.
     """
 
@@ -123,8 +132,16 @@ class MessageCreateParamsBase(TypedDict, total=False):
     cacheable block in the request.
     """
 
-    container: Optional[str]
+    container: Optional[MessageCreateParamsContainerParam]
     """Container identifier for reuse across requests."""
+
+    diagnostics: Optional[DiagnosticsParam]
+    """Request-level diagnostics.
+
+    Supply `previous_message_id` to have the response include
+    `diagnostics.cache_miss_reason` explaining any prompt-cache divergence from that
+    prior request.
+    """
 
     inference_geo: Optional[str]
     """Specifies the geographic region for inference processing.
@@ -144,7 +161,19 @@ class MessageCreateParamsBase(TypedDict, total=False):
     for this request.
 
     Anthropic offers different levels of service for your API requests. See
-    [service-tiers](https://docs.claude.com/en/api/service-tiers) for details.
+    [service-tiers](https://platform.claude.com/docs/en/api/service-tiers) for
+    details.
+    """
+
+    speed: Optional[Literal["standard", "fast"]]
+    """The inference speed mode for this request.
+
+    `"fast"` enables high output-tokens-per-second inference.
+
+    Some models require the `fast-mode-2026-02-01` beta header for any `speed`
+    value. See
+    [fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) for
+    which models.
     """
 
     stop_sequences: SequenceNotStr[str]
@@ -164,30 +193,20 @@ class MessageCreateParamsBase(TypedDict, total=False):
 
     A system prompt is a way of providing context and instructions to Claude, such
     as specifying a particular goal or role. See our
-    [guide to system prompts](https://docs.claude.com/en/docs/system-prompts).
-    """
-
-    temperature: float
-    """Amount of randomness injected into the response.
-
-    Defaults to `1.0`. Ranges from `0.0` to `1.0`. Use `temperature` closer to `0.0`
-    for analytical / multiple choice, and closer to `1.0` for creative and
-    generative tasks.
-
-    Note that even with `temperature` of `0.0`, the results will not be fully
-    deterministic.
+    [guide to system prompts](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#give-claude-a-role).
     """
 
     thinking: ThinkingConfigParam
-    """Configuration for enabling Claude's extended thinking.
+    """Configuration for Claude's thinking.
 
-    When enabled, responses include `thinking` content blocks showing Claude's
-    thinking process before the final answer. Requires a minimum budget of 1,024
-    tokens and counts towards your `max_tokens` limit.
+    With `{"type": "adaptive"}`, Claude decides when and how much to think. With
+    `{"type": "enabled"}` (manual extended thinking), you set a `budget_tokens` of
+    at least 1,024. Thinking tokens count toward your `max_tokens` limit.
 
-    See
-    [extended thinking](https://docs.claude.com/en/docs/build-with-claude/extended-thinking)
-    for details.
+    Which `type` values are accepted, and what happens when you omit `thinking`,
+    depend on the model. See
+    [thinking](https://platform.claude.com/docs/en/build-with-claude/thinking#configuring-thinking)
+    for each model's behavior.
     """
 
     tool_choice: ToolChoiceParam
@@ -207,9 +226,9 @@ class MessageCreateParamsBase(TypedDict, total=False):
 
     There are two types of tools: **client tools** and **server tools**. The
     behavior described below applies to client tools. For
-    [server tools](https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview#server-tools),
+    [server tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools),
     see their individual documentation as each has its own behavior (e.g., the
-    [web search tool](https://docs.claude.com/en/docs/agents-and-tools/tool-use/web-search-tool)).
+    [web search tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)).
 
     Each tool definition includes:
 
@@ -272,29 +291,25 @@ class MessageCreateParamsBase(TypedDict, total=False):
     functions, or more generally whenever you want the model to produce a particular
     JSON structure of output.
 
-    See our [guide](https://docs.claude.com/en/docs/tool-use) for more details.
+    See our
+    [guide](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview)
+    for more details.
     """
 
-    top_k: int
-    """Only sample from the top K options for each subsequent token.
+    user_profile_id: str
+    """The user profile ID to attribute this request to.
 
-    Used to remove "long tail" low probability responses.
-    [Learn more technical details here](https://towardsdatascience.com/how-to-sample-from-language-models-682bceb97277).
-
-    Recommended for advanced use cases only. You usually only need to use
-    `temperature`.
+    Use when acting on behalf of a party other than your organization.
     """
 
-    top_p: float
-    """Use nucleus sampling.
+    workspace_id: str
+    """Optional header to select the Workspace for this request.
 
-    In nucleus sampling, we compute the cumulative distribution over all the options
-    for each subsequent token in decreasing probability order and cut it off once it
-    reaches a particular probability specified by `top_p`. You should either alter
-    `temperature` or `top_p`, but not both.
+    The value is a Workspace ID (for example, `wrkspc_011CZkZaBF1tNoB5wlCeusgy`).
 
-    Recommended for advanced use cases only. You usually only need to use
-    `temperature`.
+    Only needed for credentials that can act on more than one Workspace. A
+    credential that belongs to a specific Workspace may omit it; if sent, it must
+    match that Workspace.
     """
 
 
@@ -318,7 +333,13 @@ class MessageCreateParamsNonStreaming(MessageCreateParamsBase, total=False):
     stream: Literal[False]
     """Whether to incrementally stream the response using server-sent events.
 
-    See [streaming](https://docs.claude.com/en/api/messages-streaming) for details.
+    When `true`, SDKs return a raw event stream.
+
+    In the TypeScript, Python and Ruby SDKs, the recommended way to stream is
+    `messages.stream()`. It sets `stream` for you and accumulates the events into
+    the final message. See
+    [Streaming with SDKs](https://platform.claude.com/docs/en/build-with-claude/streaming#streaming-with-sdks)
+    for an example in each language.
     """
 
 
@@ -326,7 +347,13 @@ class MessageCreateParamsStreaming(MessageCreateParamsBase):
     stream: Required[Literal[True]]
     """Whether to incrementally stream the response using server-sent events.
 
-    See [streaming](https://docs.claude.com/en/api/messages-streaming) for details.
+    When `true`, SDKs return a raw event stream.
+
+    In the TypeScript, Python and Ruby SDKs, the recommended way to stream is
+    `messages.stream()`. It sets `stream` for you and accumulates the events into
+    the final message. See
+    [Streaming with SDKs](https://platform.claude.com/docs/en/build-with-claude/streaming#streaming-with-sdks)
+    for an example in each language.
     """
 
 

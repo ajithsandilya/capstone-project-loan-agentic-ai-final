@@ -3,7 +3,7 @@ from typing_extensions import List, Literal, Annotated
 
 import jiter
 
-from ..._models import BaseModel, GenericModel
+from ..._models import BaseModel, GenericModel, UnionDiscriminator
 from ...types.beta import (
     BetaRawMessageStopEvent,
     BetaRawMessageDeltaEvent,
@@ -13,7 +13,6 @@ from ...types.beta import (
     BetaRawContentBlockStartEvent,
 )
 from .._parse._response import ResponseFormatT
-from ..._utils._transform import PropertyInfo
 from ...types.beta.parsed_beta_message import ParsedBetaMessage, ParsedBetaContentBlock
 from ...types.beta.beta_citations_delta import Citation
 
@@ -81,11 +80,17 @@ class BetaCompactionEvent(BaseModel):
     content: Union[str, None]
     """The compaction content"""
 
+    encrypted_content: Union[str, None]
+    """Opaque metadata from prior compaction, to be round-tripped verbatim"""
+
 
 class ParsedBetaMessageStopEvent(BetaRawMessageStopEvent, GenericModel, Generic[ResponseFormatT]):
     type: Literal["message_stop"]
 
-    message: ParsedBetaMessage[ResponseFormatT]
+    if TYPE_CHECKING:
+        message: ParsedBetaMessage[ResponseFormatT]
+    else:
+        message: ParsedBetaMessage
 
 
 class ParsedBetaContentBlockStopEvent(BetaRawContentBlockStopEvent, GenericModel, Generic[ResponseFormatT]):
@@ -112,5 +117,5 @@ ParsedBetaMessageStreamEvent = Annotated[
         BetaRawContentBlockDeltaEvent,
         ParsedBetaContentBlockStopEvent[ResponseFormatT],
     ],
-    PropertyInfo(discriminator="type"),
+    UnionDiscriminator("type"),
 ]

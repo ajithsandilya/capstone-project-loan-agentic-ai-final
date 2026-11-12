@@ -3,11 +3,11 @@ ApplicantDB MCP Server
 Provides contextual applicant information via in-memory mock data.
 """
 import os
-from fastapi import FastAPI
+from fastmcp import FastMCP
 from pydantic import BaseModel
 from typing import Dict, Any, List
 
-app = FastAPI(title="ApplicantDB MCP Server")
+mcp = FastMCP("ApplicantDB MCP Server")
 
 # In-memory mock applicant data for proof-of-concept
 MOCK_APPLICANT_RECORDS: Dict[str, Dict[str, Any]] = {
@@ -61,27 +61,25 @@ class ApplicantContextResponse(BaseModel):
     completeness_issues: List[str]
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "server": "ApplicantDB"}
 
 
-@app.post("/tools/get_applicant_context", response_model=ApplicantContextResponse)
-def get_applicant_context(req: ApplicantContextRequest) -> ApplicantContextResponse:
-    record = MOCK_APPLICANT_RECORDS.get(req.applicant_id, dict(DEFAULT_RECORD))
+
+@mcp.tool()
+def get_applicant_context(applicant_id: str, age: int, income: float, employment_type: str) -> dict:
+    record = MOCK_APPLICANT_RECORDS.get(applicant_id, dict(DEFAULT_RECORD))
 
     # Derive income stability indicators
     indicators = []
-    if req.income >= 80000:
+    if income >= 80000:
         indicators.append("High income bracket")
-    elif req.income >= 40000:
+    elif income >= 40000:
         indicators.append("Medium income bracket")
     else:
         indicators.append("Low income bracket")
 
-    if req.employment_type.upper() in ("SALARIED", "GOVERNMENT"):
+    if employment_type.upper() in ("SALARIED", "GOVERNMENT"):
         indicators.append("Stable employment type")
-    elif req.employment_type.upper() in ("SELF_EMPLOYED", "CONTRACT"):
+    elif employment_type.upper() in ("SELF_EMPLOYED", "CONTRACT"):
         indicators.append("Variable employment type")
     else:
         indicators.append("High-risk employment type")
@@ -93,26 +91,33 @@ def get_applicant_context(req: ApplicantContextRequest) -> ApplicantContextRespo
 
     # Check completeness
     completeness_issues = []
-    if req.age < 18:
+    if age < 18:
         completeness_issues.append("Age below minimum threshold (18)")
-    if req.income <= 0:
+    if income <= 0:
         completeness_issues.append("Zero or negative income reported")
-    if not req.employment_type.strip():
+    if not employment_type.strip():
         completeness_issues.append("Employment type missing")
 
-    return ApplicantContextResponse(
-        applicant_id=req.applicant_id,
-        credit_history=record["credit_history"],
-        previous_loans=record["previous_loans"],
-        previous_defaults=record["previous_defaults"],
-        years_at_current_employment=record["years_at_current_employment"],
-        income_verification_status=record["income_verification_status"],
-        income_stability_indicators=indicators,
-        completeness_issues=completeness_issues,
-    )
+    return {
+        "applicant_id": applicant_id,
+        "credit_history": record["credit_history"],
+        "previous_loans": record["previous_loans"],
+        "previous_defaults": record["previous_defaults"],
+        "years_at_current_employment": record["years_at_current_employment"],
+        "income_verification_status": record["income_verification_status"],
+        "income_stability_indicators": indicators,
+        "completeness_issues": completeness_issues,
+    }
+
+
+app = mcp.http_app()
 
 
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.getenv("MCP_APPLICANT_DB_PORT", "8001"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+
+    mcp.run(
+        transport="http",
+        host="0.0.0.0",
+        port=port
+    )

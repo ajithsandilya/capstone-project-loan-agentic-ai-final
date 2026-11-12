@@ -6,11 +6,11 @@ All thresholds are loaded from config/poc_rules.yaml.
 import os
 import yaml
 from pathlib import Path
-from fastapi import FastAPI
+from fastmcp import FastMCP
 from pydantic import BaseModel
 from typing import Dict, Any
 
-app = FastAPI(title="RiskRulesDB MCP Server")
+mcp = FastMCP("RiskRulesDB MCP Server")
 
 
 def _load_rules() -> Dict[str, Any]:
@@ -29,13 +29,8 @@ class RiskRulesResponse(BaseModel):
     disclaimer: str
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "server": "RiskRulesDB"}
-
-
-@app.post("/tools/get_risk_rules", response_model=RiskRulesResponse)
-def get_risk_rules(req: RiskRulesRequest) -> RiskRulesResponse:
+@mcp.tool()
+def get_risk_rules(rule_category: str) -> Dict[str, Any]:
     all_rules = _load_rules()
     disclaimer = (
         "CONFIGURABLE PROOF-OF-CONCEPT RISK RULES. "
@@ -52,15 +47,21 @@ def get_risk_rules(req: RiskRulesRequest) -> RiskRulesResponse:
         "decision": all_rules.get("decision_synthesis", {}),
     }
 
-    if req.rule_category == "all":
+    if rule_category == "all":
         rules = category_map
     else:
-        rules = {req.rule_category: category_map.get(req.rule_category, {})}
+        rules = {rule_category: category_map.get(rule_category, {})}
 
-    return RiskRulesResponse(rule_category=req.rule_category, rules=rules, disclaimer=disclaimer)
+    return {
+        "rule_category": rule_category,
+        "rules": rules,
+        "disclaimer": disclaimer,
+    }
+
+
+app = mcp.http_app()
 
 
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.getenv("MCP_RISK_RULES_DB_PORT", "8002"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    mcp.run(transport="http", host="0.0.0.0", port=port)

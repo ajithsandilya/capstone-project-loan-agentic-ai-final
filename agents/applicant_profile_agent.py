@@ -4,10 +4,12 @@ MCP Server: ApplicantDB
 Analyzes applicant profile and produces structured output.
 """
 import os
-import httpx
+import logging
 from models.loan_application import LoanApplication
 from models.agent_outputs import ApplicantProfileOutput
+from mcp_client import call_mcp_tool_sync
 
+logger = logging.getLogger(__name__)
 
 MCP_APPLICANT_DB_URL = os.getenv("MCP_APPLICANT_DB_URL", "http://localhost:8001")
 
@@ -19,19 +21,15 @@ def run_applicant_profile_agent(application: LoanApplication) -> ApplicantProfil
     """
     profile = application.applicant_profile
 
-    # Call ApplicantDB MCP server
-    response = httpx.post(
-        f"{MCP_APPLICANT_DB_URL}/tools/get_applicant_context",
-        json={
-            "applicant_id": application.applicant_id,
-            "age": profile.age,
-            "income": profile.income,
-            "employment_type": profile.employment_type,
-        },
-        timeout=10.0,
+    # Call ApplicantDB MCP server via proper FastMCP Client
+    ctx = call_mcp_tool_sync(
+        MCP_APPLICANT_DB_URL,
+        "get_applicant_context",
+        applicant_id=application.applicant_id,
+        age=profile.age,
+        income=profile.income,
+        employment_type=profile.employment_type,
     )
-    response.raise_for_status()
-    ctx = response.json()
 
     # Derive Income Stability Score (0–100)
     income_stability_score = _calculate_income_stability(

@@ -1,5 +1,3 @@
-# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
 from __future__ import annotations
 
 from typing import Dict, List, Iterable, Optional
@@ -19,7 +17,9 @@ class MemoryTool20250818Param(TypedDict, total=False):
 
     type: Required[Literal["memory_20250818"]]
 
-    allowed_callers: List[Literal["direct", "code_execution_20250825", "code_execution_20260120"]]
+    allowed_callers: List[
+        Literal["direct", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]
+    ]
 
     cache_control: Optional[CacheControlEphemeralParam]
     """Create a cache control breakpoint at this content block."""

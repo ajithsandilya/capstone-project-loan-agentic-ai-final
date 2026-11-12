@@ -1,4 +1,4 @@
-#!/home/ubuntu/Desktop/capstone_project/loan-agentic-ai/.venv/bin/python3
+#!/home/ubuntu/Desktop/CapstoneProject/loan-agentic-ai/.venv/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys
